@@ -64,6 +64,8 @@ ax.set_xlim(0, t_plot.max()); ax.set_ylim(0, 1.1*mass_solar)
 fig.tight_layout()
 fig.savefig(output_dir / "mass_layer_v_time.png", dpi=180)
 
+#----------------------------------------------------------------------------------------#
+
 ##Eq for Drv / dt = v
 
 # Calculation below divides velocity into logarithmic bins stopping at max velocity
@@ -122,6 +124,7 @@ print(f"Fraction of total mass represented: {np.sum(shell_masses) / total_mass:.
 print("Radius plot saved as shell_radii_v_time.png")
 
 
+ #---------------------------------------------------------------------------------#
 
 # Thermal-energy evolution for every shell (Eqs. 14-16)
 # Eq. (15): L_v = E_v / (t_diff,v + t_lc,v).
@@ -204,3 +207,66 @@ fig.savefig(output_dir / "bolometric_luminosity_v_time.png", dpi=180)
 
 print("Energy plot saved as shell_energy_v_time.png")
 print("Luminosity plot saved as bolometric_luminosity_v_time.png")
+
+
+#----------------------------------------------------------------------#
+
+# Calculation of effective temperature for the thermal emmision eq(18)
+
+# L_tot already calculated in prior in luminosity plot
+
+shell_tau_contributions = (opacity * shell_masses[:, None] / (4.0 * const.pi * shell_radii**2))
+tau_outward = (np.cumsum(shell_tau_contributions[::-1, :], axis=0)[::-1, :] - 0.5 * shell_tau_contributions)
+
+# Locate the tau=1 crossing between neighbouring shell centres at each time
+photosphere_radius = np.full(len(radius_times), np.nan)
+for j in range(len(radius_times)):
+    tau_at_time = tau_outward[:, j]
+
+    if tau_at_time[-1] >= 1.0:                 # The crossing is inside the fastest modeled shell, between its centre and the outer boundary, where the model has tau = 0.
+        fraction = 1.0 - (1.0 / tau_at_time[-1])
+        outer_boundary_radius = r_initial + max_vel * radius_times[j]
+        photosphere_radius[j] = (shell_radii[-1, j] + fraction * (outer_boundary_radius - shell_radii[-1, j]))
+    else:
+        crossings = np.flatnonzero((tau_at_time[:-1] >= 1.0) & (tau_at_time[1:] < 1.0))
+        if crossings.size > 0:
+            i = crossings[0]
+            tau_inner = tau_at_time[i]
+            tau_outer = tau_at_time[i + 1]
+
+            # Interpolate in log optical depth between the shell centres
+            fraction = np.log(tau_inner) / np.log(tau_inner / tau_outer)
+            photosphere_radius[j] = (shell_radii[i, j] + fraction * (shell_radii[i + 1, j] - shell_radii[i, j]))
+
+# Eq. (18)
+# Stefan-Boltzmann constant in CGS units: erg s^-1 cm^-2 K^-4
+
+sigma_sb = 5.670e-5
+total_luminosity = np.sum(shell_luminosities, axis=0)
+
+effective_temperature = np.full(len(radius_times), np.nan)
+valid_photosphere = np.isfinite(photosphere_radius) & (photosphere_radius > 0.0)
+effective_temperature[valid_photosphere] = (total_luminosity[valid_photosphere] / (4.0 * const.pi * sigma_sb * photosphere_radius[valid_photosphere]**2)) ** 0.25
+
+# A missing point means the tau=1 surface lies outside the modeled shell range or the modeled ejecta is optically thin throughout
+fig, ax = plt.subplots(figsize=(7, 4.5))
+ax.plot(radius_times / day, photosphere_radius / sol_radius, lw=2.0)
+ax.set_xlabel("t (days)")
+ax.set_ylabel(r"Photosphere radius $R_{ph}$ ($R_\odot$)")
+ax.set_title("Photosphere location from outward optical depth")
+ax.grid(True, alpha=0.25)
+fig.tight_layout()
+plt.savefig("photosphere_radius_v_time.png", dpi=180)
+
+fig, ax = plt.subplots(figsize=(7, 4.5))
+valid_temperature = valid_photosphere & (effective_temperature > 0.0) & (radius_times > 0.0)
+ax.loglog(radius_times[valid_temperature] / day, effective_temperature[valid_temperature], lw=2.0)
+ax.set_xlabel("t (days)")
+ax.set_ylabel(r"Effective temperature $T_{eff}$ (K)")
+ax.set_title("Blackbody effective temperature")
+ax.grid(True, which="both", alpha=0.25)
+fig.tight_layout()
+plt.savefig("effective_temperature_v_time.png", dpi=180)
+
+print("Photosphere plot saved as photosphere_radius_v_time.png")
+print("Temperature plot saved as effective_temperature_v_time.png")
